@@ -51,6 +51,7 @@ export default function StudyApp() {
   const [showPasscodeModal, setShowPasscodeModal] = useState(false);
   const [passcode, setPasscode] = useState('');
   const [examResults, setExamResults] = useState([]);
+  const [examFeedback, setExamFeedback] = useState('');
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type });
@@ -64,6 +65,7 @@ export default function StudyApp() {
       }
       if (userType === 'employer') {
         fetchExamResults();
+        fetchPublishedExams();
       }
     }
   }, [userType]);
@@ -116,9 +118,9 @@ export default function StudyApp() {
         method: 'POST',
         body: formData,
       });
-      
+
       if (!response.ok) throw new Error('Upload failed');
-      
+
       showToast('Material uploaded successfully!', 'success');
       setUploadTitle('');
       setUploadFile(null);
@@ -139,9 +141,9 @@ export default function StudyApp() {
       const response = await fetch(`${API_BASE}/materials/${id}`, {
         method: 'DELETE',
       });
-      
+
       if (!response.ok) throw new Error('Delete failed');
-      
+
       showToast('Material deleted successfully!', 'success');
       fetchMaterials();
       setSelectedMaterials(selectedMaterials.filter(mid => mid !== id));
@@ -152,7 +154,7 @@ export default function StudyApp() {
 
   const handleUpdate = async () => {
     const formData = new FormData();
-    
+
     if (editingMaterial.newTitle) {
       formData.append('title', editingMaterial.newTitle);
     }
@@ -171,9 +173,9 @@ export default function StudyApp() {
         method: 'PUT',
         body: formData,
       });
-      
+
       if (!response.ok) throw new Error('Update failed');
-      
+
       showToast('Material updated successfully!', 'success');
       setEditingMaterial(null);
       fetchMaterials();
@@ -188,7 +190,7 @@ export default function StudyApp() {
     try {
       const response = await fetch(`${API_BASE}/materials/download/${id}`);
       if (!response.ok) throw new Error('Download failed');
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -213,34 +215,34 @@ export default function StudyApp() {
     try {
       setLoading(true);
       showToast('Creating exam... This may take a moment', 'info');
-      
+
       const requestBody = {
         material_ids: selectedMaterials,
         num_questions: numQuestions
       };
-      
+
       console.log('Sending request:', requestBody);
-      
+
       const response = await fetch(`${API_BASE}/exam/create`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
         body: JSON.stringify(requestBody),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Exam creation failed');
       }
-      
+
       const data = await response.json();
-      
+
       if (!data.exam || data.exam.length === 0) {
         throw new Error('No questions were generated');
       }
-      
+
       if (userType === 'employer') {
         setCreatedExam(data.exam);
         setExamTitle('');
@@ -269,7 +271,7 @@ export default function StudyApp() {
       setLoading(true);
       const response = await fetch(`${API_BASE}/exam/publish`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
@@ -278,9 +280,9 @@ export default function StudyApp() {
           questions: createdExam
         }),
       });
-      
+
       if (!response.ok) throw new Error('Failed to publish exam');
-      
+
       showToast('Exam published successfully!', 'success');
       setCreatedExam(null);
       setExamTitle('');
@@ -300,19 +302,19 @@ export default function StudyApp() {
 
     try {
       setLoading(true);
-      
+
       // Check if employee already took this exam
       const checkResponse = await fetch(`${API_BASE}/exam/${examId}/check-attempt/${encodeURIComponent(employeeName)}`);
       const checkData = await checkResponse.json();
-      
+
       if (checkData.already_taken) {
         showToast('You have already taken this exam!', 'error');
         return;
       }
-      
+
       const response = await fetch(`${API_BASE}/exam/${examId}`);
       if (!response.ok) throw new Error('Failed to load exam');
-      
+
       const data = await response.json();
       setExam(data.questions);
       setCurrentExamId(examId);
@@ -333,9 +335,9 @@ export default function StudyApp() {
       const response = await fetch(`${API_BASE}/exam/${examId}`, {
         method: 'DELETE',
       });
-      
+
       if (!response.ok) throw new Error('Delete failed');
-      
+
       showToast('Exam deleted successfully!', 'success');
       fetchPublishedExams();
     } catch (error) {
@@ -366,14 +368,14 @@ export default function StudyApp() {
         return;
       }
     }
-    
+
     const score = calculateScore();
-    
+
     try {
       setLoading(true);
       const response = await fetch(`${API_BASE}/exam/submit`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
@@ -385,13 +387,16 @@ export default function StudyApp() {
           percentage: score.percentage
         }),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to submit exam');
       }
-      
+
+      const data = await response.json();
+
       showToast('Exam submitted successfully!', 'success');
+      setExamFeedback(data.feedback);
       setShowResults(true);
     } catch (error) {
       showToast('Failed to submit exam: ' + error.message, 'error');
@@ -410,17 +415,17 @@ export default function StudyApp() {
       setLoading(true);
       const response = await fetch(`${API_BASE}/auth/employer`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
         body: JSON.stringify(passcode),
       });
-      
+
       if (!response.ok) {
         throw new Error('Invalid passcode');
       }
-      
+
       setUserType('employer');
       setShowPasscodeModal(false);
       setPasscode('');
@@ -457,7 +462,7 @@ export default function StudyApp() {
         <div className="text-center">
           <h1 className="text-5xl font-bold text-gray-800 mb-4">Study Portal</h1>
           <p className="text-xl text-gray-600 mb-12">Choose your role to continue</p>
-          
+
           <div className="flex gap-8 justify-center flex-wrap">
             <button
               onClick={() => setShowPasscodeModal(true)}
@@ -521,7 +526,7 @@ export default function StudyApp() {
     return (
       <div className="min-h-screen bg-gray-50">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-        
+
         <div className="bg-blue-600 text-white p-6 shadow-lg">
           <div className="max-w-7xl mx-auto flex justify-between items-center">
             <div className="flex items-center gap-3">
@@ -569,11 +574,10 @@ export default function StudyApp() {
                         <td className="px-4 py-3 text-sm text-gray-800">{result.exam_title}</td>
                         <td className="px-4 py-3 text-sm text-gray-800">{result.score}/{result.total_questions}</td>
                         <td className="px-4 py-3 text-sm">
-                          <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                            parseFloat(result.percentage) >= 70 ? 'bg-green-100 text-green-700' :
+                          <span className={`px-2 py-1 rounded-full text-xs font-semibold ${parseFloat(result.percentage) >= 70 ? 'bg-green-100 text-green-700' :
                             parseFloat(result.percentage) >= 50 ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
+                              'bg-red-100 text-red-700'
+                            }`}>
                             {result.percentage}%
                           </span>
                         </td>
@@ -587,7 +591,37 @@ export default function StudyApp() {
               </div>
             )}
           </div>
-          
+
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 className="text-2xl font-semibold mb-4 flex items-center gap-2">
+              <BookOpen className="w-6 h-6 text-blue-600" />
+              Published Exams ({publishedExams.length})
+            </h2>
+            {publishedExams.length === 0 ? (
+              <p className="text-gray-500 text-center py-8">No exams published yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {publishedExams.map((exam) => (
+                  <div key={exam.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                    <div>
+                      <p className="font-medium text-gray-800">{exam.title}</p>
+                      <p className="text-sm text-gray-500">
+                        {exam.question_count} Questions • Created: {new Date(exam.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteExam(exam.id)}
+                      className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                      title="Delete Exam"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 className="text-2xl font-semibold mb-4 flex items-center gap-2">
               <Upload className="w-6 h-6 text-blue-600" />
@@ -723,7 +757,7 @@ export default function StudyApp() {
                   <XCircle className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <div className="space-y-6">
                 {createdExam.map((question, idx) => (
                   <div key={idx} className="border-b pb-6 last:border-b-0">
@@ -735,18 +769,17 @@ export default function StudyApp() {
                         {question.question}
                       </p>
                     </div>
-                    
+
                     <div className="space-y-2 ml-12">
                       {Object.entries(question.options).map(([key, value]) => {
                         const isCorrect = isCorrectAnswer(question.answer, key);
                         return (
                           <div
                             key={key}
-                            className={`p-3 rounded-lg border-2 ${
-                              isCorrect
-                                ? 'bg-green-50 border-green-500'
-                                : 'bg-gray-50 border-gray-200'
-                            }`}
+                            className={`p-3 rounded-lg border-2 ${isCorrect
+                              ? 'bg-green-50 border-green-500'
+                              : 'bg-gray-50 border-gray-200'
+                              }`}
                           >
                             <span className="font-semibold text-gray-700 mr-3">{key})</span>
                             <span className="text-gray-700">{value}</span>
@@ -762,7 +795,7 @@ export default function StudyApp() {
                   </div>
                 ))}
               </div>
-              
+
               <div className="mt-6 flex gap-3">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Exam Title</label>
@@ -792,7 +825,7 @@ export default function StudyApp() {
                         .join('\n');
                       return `Question ${idx + 1}: ${q.question}\n${optionsText}\nCorrect Answer: ${q.answer}\n`;
                     }).join('\n---\n\n');
-                    
+
                     const blob = new Blob([examText], { type: 'text/plain' });
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -870,7 +903,7 @@ export default function StudyApp() {
     return (
       <div className="min-h-screen bg-gray-50">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-        
+
         <div className="bg-green-600 text-white p-6 shadow-lg">
           <div className="max-w-7xl mx-auto flex justify-between items-center">
             <div className="flex items-center gap-3">
@@ -974,11 +1007,11 @@ export default function StudyApp() {
   if (exam && !showResults) {
     const question = exam[currentQuestion];
     const answeredCount = Object.keys(userAnswers).length;
-    
+
     return (
       <div className="min-h-screen bg-gray-50">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-        
+
         <div className="bg-indigo-600 text-white p-6 shadow-lg">
           <div className="max-w-4xl mx-auto">
             <h1 className="text-3xl font-bold">Exam in Progress</h1>
@@ -1010,11 +1043,10 @@ export default function StudyApp() {
                 <button
                   key={key}
                   onClick={() => handleAnswerSelect(key)}
-                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                    userAnswers[currentQuestion] === key
-                      ? 'border-indigo-600 bg-indigo-50'
-                      : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
-                  }`}
+                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${userAnswers[currentQuestion] === key
+                    ? 'border-indigo-600 bg-indigo-50'
+                    : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
+                    }`}
                 >
                   <span className="font-semibold text-indigo-600 mr-3">{key})</span>
                   <span className="text-gray-700">{value}</span>
@@ -1076,6 +1108,16 @@ export default function StudyApp() {
             ) : (
               <p className="text-red-600 font-semibold mt-2">More practice needed 💪</p>
             )}
+
+            {examFeedback && (
+              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg max-w-2xl mx-auto">
+                <h3 className="text-lg font-semibold text-blue-800 mb-2 flex items-center justify-center gap-2">
+                  <Briefcase className="w-5 h-5" />
+                  AI Feedback
+                </h3>
+                <p className="text-blue-900 italic">"{examFeedback}"</p>
+              </div>
+            )}
           </div>
 
           <div className="bg-white rounded-lg shadow-md p-8 space-y-6">
@@ -1092,13 +1134,12 @@ export default function StudyApp() {
                     return (
                       <div
                         key={key}
-                        className={`p-3 rounded-lg ${
-                          isCorrect
-                            ? 'bg-green-100 border-2 border-green-500'
-                            : isUserAnswer
+                        className={`p-3 rounded-lg ${isCorrect
+                          ? 'bg-green-100 border-2 border-green-500'
+                          : isUserAnswer
                             ? 'bg-red-100 border-2 border-red-500'
                             : 'bg-gray-50'
-                        }`}
+                          }`}
                       >
                         <span className="font-semibold mr-2">{key})</span>
                         {value}
