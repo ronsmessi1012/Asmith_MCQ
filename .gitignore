@@ -5,6 +5,9 @@ __pycache__/
 *.pyd
 *.db
 *.sqlite3
+*.xlsx
+backend/exam_sheets/
+backend/exams_master.xlsx
 
 # Virtual env
 venv/

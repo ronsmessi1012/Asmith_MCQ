@@ -13,6 +13,12 @@ import PyPDF2
 import re
 import json
 
+# Import Excel Utilities
+from excel_utils import (
+    init_excel_db, write_exam, read_exams, get_exam_by_id, delete_exam,
+    write_result, read_results, check_result_exists
+)
+
 # ----------------- Database Setup -----------------
 DATABASE_URL = "sqlite:///./study_app.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -28,28 +34,16 @@ class Material(Base):
     filepath = Column(String)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
-class Exam(Base):
-    __tablename__ = "exams"
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    questions = Column(String)  # JSON string
-    created_at = Column(DateTime, default=datetime.utcnow)
-    published = Column(Integer, default=1)  # 1 = published, 0 = draft
-
-class ExamResult(Base):
-    __tablename__ = "exam_results"
-    id = Column(Integer, primary_key=True, index=True)
-    exam_id = Column(Integer)
-    employee_name = Column(String)
-    score = Column(Integer)
-    total_questions = Column(Integer)
-    percentage = Column(String)
-    completed_at = Column(DateTime, default=datetime.utcnow)
+# Note: Exam and ExamResult are now stored in Excel, so we don't need SQL models for them anymore.
+# Keeping Material in SQLite as requested (only exam data in Excel).
 
 Base.metadata.create_all(bind=engine)
 
 # ----------------- FastAPI App -----------------
 app = FastAPI(title="Study Material & Exam API")
+
+# Initialize Excel DB
+init_excel_db()
 
 # Add CORS middleware
 app.add_middleware(
@@ -101,7 +95,7 @@ def extract_text_from_pdf(file_path: str) -> str:
                 text += page_text + "\n"
     return text
 
-def parse_mcqs_from_text(text: str, num_questions: int = 10) -> list[dict]:
+def parse_mcqs_from_text(text: str, num_questions: int = 10) -> List[dict]:
     """
     Parse MCQs from text with improved pattern matching
     """
@@ -157,7 +151,7 @@ def parse_mcqs_from_text(text: str, num_questions: int = 10) -> list[dict]:
     
     return valid_mcqs[:num_questions]
 
-def generate_mcqs(file_paths: list[str], num_questions: int = 10) -> list[dict]:
+def generate_mcqs(file_paths: List[str], num_questions: int = 10) -> List[dict]:
     combined_text = ""
     for path in file_paths:
         extracted = extract_text_from_pdf(path)
@@ -242,7 +236,7 @@ def download_material(material_id: int, db: Session = Depends(get_db)):
     return FileResponse(material.filepath, filename=material.filename)
 
 @app.delete("/materials/{material_id}")
-def delete_material(material_id: int, db: Session = Depends(get_db)):
+def delete_material_endpoint(material_id: int, db: Session = Depends(get_db)):
     material = db.query(Material).filter(Material.id == material_id).first()
     if not material:
         raise HTTPException(status_code=404, detail="Material not found")
@@ -307,48 +301,53 @@ def create_exam(
 @app.post("/exam/publish")
 def publish_exam(request: PublishExamRequest, db: Session = Depends(get_db)):
     """Publish an exam so employees can take it"""
-    exam = Exam(
-        title=request.title,
-        questions=json.dumps(request.questions),
-        published=1
-    )
-    db.add(exam)
-    db.commit()
-    db.refresh(exam)
-    return {"message": "Exam published successfully", "exam_id": exam.id}
+    try:
+        exam_id = write_exam(
+            title=request.title,
+            questions=request.questions,
+            published=1
+        )
+        return {"message": "Exam published successfully", "exam_id": exam_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to publish exam: {str(e)}")
 
 @app.get("/exams")
-def list_exams(db: Session = Depends(get_db)):
+def list_exams_endpoint():
     """Get all published exams"""
-    exams = db.query(Exam).filter(Exam.published == 1).all()
+    exams = read_exams()
+    # Filter for published only if we want, but write_exam defaults to published=1 and we don't handle drafts really.
+    # The read_exams returns dicts.
     return [{
-        "id": exam.id,
-        "title": exam.title,
-        "created_at": exam.created_at,
-        "question_count": len(json.loads(exam.questions))
-    } for exam in exams]
+        "id": exam['id'],
+        "title": exam['title'],
+        "created_at": exam['created_at'],
+        "question_count": len(json.loads(exam['questions']))
+    } for exam in exams if exam.get('published', 1) == 1]
 
 @app.get("/exam/{exam_id}")
-def get_exam(exam_id: int, db: Session = Depends(get_db)):
+def get_exam_endpoint(exam_id: int):
     """Get exam questions for taking the exam"""
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    exam = get_exam_by_id(exam_id)
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    
     return {
-        "id": exam.id,
-        "title": exam.title,
-        "questions": json.loads(exam.questions)
+        "id": exam['id'],
+        "title": exam['title'],
+        "questions": json.loads(exam['questions'])
     }
 
 @app.delete("/exam/{exam_id}")
-def delete_exam(exam_id: int, db: Session = Depends(get_db)):
+def delete_exam_endpoint(exam_id: int):
     """Delete an exam"""
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    exam = get_exam_by_id(exam_id)
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
-    db.delete(exam)
-    db.commit()
-    return {"message": "Exam deleted successfully"}
+    try:
+        delete_exam(exam_id)
+        return {"message": "Exam deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete exam: {str(e)}")
 
 @app.post("/auth/employer")
 def verify_employer(passcode: str = Body(...)):
@@ -357,69 +356,89 @@ def verify_employer(passcode: str = Body(...)):
         return {"success": True, "message": "Authentication successful"}
     raise HTTPException(status_code=401, detail="Invalid passcode")
 
+def generate_feedback(percentage: float) -> str:
+    """Generate honest yet soothing feedback based on score"""
+    prompt = (
+        f"You are a wise and empathetic educational mentor. A student has scored {percentage}% on an exam. "
+        "Provide honest, descriptive, and well-curated feedback. "
+        "If the score is low, be soothing but precise about the importance of reviewing the material. "
+        "If the score is high, be specific about their mastery. "
+        "Avoid generic one-liners. Write a thoughtful paragraph (3-4 sentences) that feels personal and encouraging."
+    )
+    try:
+        response = ollama.chat(model='llama3:latest', messages=[
+            {'role': 'user', 'content': prompt}
+        ])
+        return response['message']['content']
+    except Exception as e:
+        print(f"Ollama feedback generation failed: {e}")
+        return "Great job on completing the exam!"
+
 @app.post("/exam/submit")
-def submit_exam_result(request: SubmitExamRequest, db: Session = Depends(get_db)):
+def submit_exam_result(request: SubmitExamRequest):
     """Submit exam result"""
     # Check if employee already took this exam
-    existing = db.query(ExamResult).filter(
-        ExamResult.exam_id == request.exam_id,
-        ExamResult.employee_name == request.employee_name
-    ).first()
-    
-    if existing:
+    if check_result_exists(request.exam_id, request.employee_name):
         raise HTTPException(status_code=400, detail="You have already taken this exam")
     
-    result = ExamResult(
-        exam_id=request.exam_id,
-        employee_name=request.employee_name,
-        score=request.score,
-        total_questions=request.total_questions,
-        percentage=request.percentage
-    )
-    db.add(result)
-    db.commit()
-    db.refresh(result)
-    return {"message": "Exam submitted successfully", "result_id": result.id}
+    try:
+        exam = get_exam_by_id(request.exam_id)
+        if not exam:
+             raise HTTPException(status_code=404, detail="Exam not found")
+        
+        # Generate AI Feedback
+        feedback = generate_feedback(float(request.percentage))
+             
+        result_id = write_result(
+            exam_id=request.exam_id,
+            exam_title=exam['title'],
+            employee_name=request.employee_name,
+            score=request.score,
+            total_questions=request.total_questions,
+            percentage=request.percentage,
+            feedback=feedback
+        )
+        return {
+            "message": "Exam submitted successfully", 
+            "result_id": result_id,
+            "feedback": feedback
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to submit result: {str(e)}")
 
 @app.get("/exam/{exam_id}/check-attempt/{employee_name}")
-def check_exam_attempt(exam_id: int, employee_name: str, db: Session = Depends(get_db)):
+def check_exam_attempt(exam_id: int, employee_name: str):
     """Check if employee has already taken the exam"""
-    existing = db.query(ExamResult).filter(
-        ExamResult.exam_id == exam_id,
-        ExamResult.employee_name == employee_name
-    ).first()
-    return {"already_taken": existing is not None}
+    already_taken = check_result_exists(exam_id, employee_name)
+    return {"already_taken": already_taken}
 
 @app.get("/exam/{exam_id}/results")
-def get_exam_results(exam_id: int, db: Session = Depends(get_db)):
+def get_exam_results(exam_id: int):
     """Get all results for a specific exam"""
-    results = db.query(ExamResult).filter(ExamResult.exam_id == exam_id).all()
+    results = read_results(exam_id)
     return [{
-        "id": r.id,
-        "employee_name": r.employee_name,
-        "score": r.score,
-        "total_questions": r.total_questions,
-        "percentage": r.percentage,
-        "completed_at": r.completed_at
+        "id": r['id'],
+        "employee_name": r['employee_name'],
+        "score": r['score'],
+        "total_questions": r['total_questions'],
+        "percentage": r['percentage'],
+        "completed_at": r['completed_at']
     } for r in results]
 
 @app.get("/results/all")
-def get_all_results(db: Session = Depends(get_db)):
+def get_all_results():
     """Get all exam results"""
-    results = db.query(ExamResult).all()
-    exam_titles = {}
-    for r in results:
-        if r.exam_id not in exam_titles:
-            exam = db.query(Exam).filter(Exam.id == r.exam_id).first()
-            exam_titles[r.exam_id] = exam.title if exam else "Unknown"
+    results = read_results()
+    exams = read_exams()
+    exam_titles = {e['id']: e['title'] for e in exams}
     
     return [{
-        "id": r.id,
-        "exam_id": r.exam_id,
-        "exam_title": exam_titles.get(r.exam_id, "Unknown"),
-        "employee_name": r.employee_name,
-        "score": r.score,
-        "total_questions": r.total_questions,
-        "percentage": r.percentage,
-        "completed_at": r.completed_at
+        "id": r['id'],
+        "exam_id": r['exam_id'],
+        "exam_title": exam_titles.get(r['exam_id'], "Unknown"),
+        "employee_name": r['employee_name'],
+        "score": r['score'],
+        "total_questions": r['total_questions'],
+        "percentage": r['percentage'],
+        "completed_at": r['completed_at']
     } for r in results]
