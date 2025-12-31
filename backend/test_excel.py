@@ -45,7 +45,7 @@ def test_excel_flow():
         "employee_name": "Test User",
         "score": 1,
         "total_questions": 1,
-        "percentage": "100%"
+        "percentage": "100.0"
     }
     response = client.post("/exam/submit", json=result_data)
     if response.status_code != 200:
